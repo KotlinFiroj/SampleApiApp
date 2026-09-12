@@ -64,5 +64,4 @@ dependencies {
 
     implementation(libs.hilt.navigation.compose)
     ksp(libs.hilt.android.compiler)
-    ksp(libs.moshi.kotlin.codegen)
 }

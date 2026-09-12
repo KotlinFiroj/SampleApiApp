@@ -24,9 +24,9 @@ fun LoadUserList(viewModel: ListViewModel = hiltViewModel()) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                items((list as UiState.Success).list) { item ->
+                /*items((list as UiState.Success).list) { item ->
                     Text(item.name)
-                }
+                }*/
             }
         }
         is UiState.Failure -> {

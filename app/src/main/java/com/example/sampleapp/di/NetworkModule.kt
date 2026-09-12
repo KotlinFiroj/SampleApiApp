@@ -22,17 +22,6 @@ class NetworkModule {
     @Retention(AnnotationRetention.BINARY)
     annotation class UserUrl
 
-    @Qualifier
-    @Retention(AnnotationRetention.BINARY)
-    annotation class PhpUrl
-
-    /*@Provides
-    @PhpUrl
-    fun providePhpUrl() = "https://kotlin.handsonandroid.com/"
-
-    @Provides
-    @UserUrl
-    fun providesUserUrl() = "https://jsonplaceholder.typicode.com/"*/
 
     @UserUrl
     @Provides
@@ -41,18 +30,6 @@ class NetworkModule {
 
         return Retrofit.Builder()
             .baseUrl("https://jsonplaceholder.typicode.com/")
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
-            .client(client)
-            .build()
-    }
-
-    @PhpUrl
-    @Provides
-    fun providesPhpRetrofit(client: OkHttpClient): Retrofit {
-        val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
-
-        return Retrofit.Builder()
-            .baseUrl("https://kotlin.handsonandroid.com/")
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .client(client)
             .build()
@@ -81,10 +58,5 @@ class NetworkModule {
     @Provides
     fun provideApiService(@UserUrl retrofit: Retrofit): ApiService {
         return retrofit.create(ApiService::class.java)
-    }
-
-    @Provides
-    fun provideRegisterService(@PhpUrl retrofit: Retrofit): RegisterService {
-        return retrofit.create(RegisterService::class.java)
     }
 }

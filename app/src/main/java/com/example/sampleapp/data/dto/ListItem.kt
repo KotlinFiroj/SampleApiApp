@@ -5,10 +5,6 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class ListItem(
-    @Json(name = "address")
-    val address: Address? = null,
-    @Json(name = "company")
-    val company: Company? = null,
     @Json(name = "email")
     val email: String? = null,
     @Json(name = "id")
