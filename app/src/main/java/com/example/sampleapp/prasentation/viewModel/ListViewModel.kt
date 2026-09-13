@@ -1,5 +1,6 @@
 package com.example.sampleapp.prasentation.viewModel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.sampleapp.domain.model.UserUI
@@ -10,8 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import retrofit2.HttpException
-import java.io.IOException
 import javax.inject.Inject
 
 @HiltViewModel
@@ -27,23 +26,28 @@ class ListViewModel @Inject constructor(
     fun loadUsers() {
         viewModelScope.launch {
             _uiState.value = UiState.Loading
-            // collect every emission from the Flow — each one is a Result<List<UserUI>>
-            // In offline-first: emit 1 = cached DB data, emit 2 = fresh network data
+            // No try/catch needed here — Repository guarantees every error
+            // is already wrapped in Result.failure(). The ViewModel only
+            // needs to map Result → UiState, never handle raw exceptions.
             useCase().collect { result ->
                 result.fold(
                     onSuccess = { users ->
                         _uiState.value = if (users.isEmpty()) UiState.Empty
                                          else UiState.Success(users)
                     },
-                    onFailure = { _uiState.value = UiState.Error(it.toMessage()) }
+                    onFailure = { throwable ->
+                        Log.e(TAG, "loadUsers failed: ${throwable.message}")
+                        _uiState.value = UiState.Error(throwable.toMessage())
+                    }
                 )
             }
+            // CancellationException is NOT caught — coroutine cancels cleanly
         }
     }
+
+    companion object { private const val TAG = "ListViewModel" }
 }
 
 private fun Throwable.toMessage(): String = when (this) {
-    is IOException   -> "Network error. Please check your connection."
-    is HttpException -> "Server error (${code()}). Please try again."
-    else             -> message ?: "An unexpected error occurred."
+    else -> message ?: "An unexpected error occurred."
 }

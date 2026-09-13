@@ -1,5 +1,6 @@
 package com.example.sampleapp.data.repository
 
+import android.util.Log
 import com.example.sampleapp.data.mapper.toUserUI
 import com.example.sampleapp.data.remote.ApiService
 import com.example.sampleapp.domain.model.UserUI
@@ -8,35 +9,31 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import retrofit2.HttpException
-import java.io.IOException
 import javax.inject.Inject
 
 class ListRepositoryImpl @Inject constructor(
     private val apiService: ApiService,
 ) : ListRepository {
 
-    // flow{} builder — cold Flow, only runs when collected (by the ViewModel).
-    // Each emission is Result<T> so an error doesn't terminate the stream —
-    // the ViewModel receives it and shows UiState.Error without crashing the pipeline.
-    //
-    // Production extension: add Room here as emit #1 (cached data) before the
-    // network call so the user sees data instantly even when offline.
+    // try/catch belongs HERE — Repository is the data layer boundary.
+    // Retrofit throws IOException / HttpException — catch them here and
+    // convert to Result.failure() so nothing above this layer ever sees an exception.
+    // .catch {} handles exceptions thrown inside flow{} — equivalent to try/catch
+    // but keeps the Flow alive for future emissions (e.g. cache-then-network).
     override fun getUsers(): Flow<Result<List<UserUI>>> = flow {
         val response = apiService.getUserList()
         if (response.isSuccessful) {
             val users = response.body()?.map { it.toUserUI() } ?: emptyList()
+            Log.d(TAG, "getUsers: ${users.size} users fetched")
             emit(Result.success(users))
         } else {
             emit(Result.failure(HttpException(response)))
         }
     }.catch { e ->
-        // .catch only handles IOException and unexpected throwables.
-        // CancellationException is NOT passed to catch — Flow propagates it
-        // transparently, preserving structured concurrency.
-        when (e) {
-            is IOException   -> emit(Result.failure(e))
-            is HttpException -> emit(Result.failure(e))
-            else             -> emit(Result.failure(e))
-        }
+        // CancellationException never reaches here — Flow propagates it transparently.
+        // Every other throwable (IOException, HttpException, etc.) becomes Result.failure.
+        emit(Result.failure(e))
     }
+
+    companion object { private const val TAG = "ListRepository" }
 }

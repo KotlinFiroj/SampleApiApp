@@ -11,8 +11,7 @@ This project follows a pragmatic **Clean Architecture + MVVM** pattern for a sin
 ```
 ┌─────────────────────────────────────────────┐
 │               Compose UI Layer              │
-│  UserListRoute (stateful, collects state)   │
-│  UserListScreen (stateless, renders state)  │
+│  UserListScreen (stateful — owns ViewModel) │
 └─────────────────┬───────────────────────────┘
                   │  UiState<List<UserUI>>
                   ▼
@@ -23,7 +22,7 @@ This project follows a pragmatic **Clean Architecture + MVVM** pattern for a sin
 │   · viewModelScope.launch                   │
 │   · loadUsers() / retry                     │
 └─────────────────┬───────────────────────────┘
-                  │  Result<List<UserUI>>
+                  │  Flow<Result<List<UserUI>>>
                   ▼
 ┌─────────────────────────────────────────────┐
 │               Domain Layer                  │
@@ -31,7 +30,7 @@ This project follows a pragmatic **Clean Architecture + MVVM** pattern for a sin
 │  ListRepository (interface)                 │
 │  UserUI (domain model)                      │
 └─────────────────┬───────────────────────────┘
-                  │  Result<List<UserUI>>
+                  │  Flow<Result<List<UserUI>>>
                   ▼
 ┌─────────────────────────────────────────────┐
 │                Data Layer                   │
@@ -50,39 +49,45 @@ This project follows a pragmatic **Clean Architecture + MVVM** pattern for a sin
 ## Layer Responsibilities
 
 ### Compose UI
-- Renders the current `UiState` — nothing more.
-- **Stateful** composable (`UserListRoute`) collects from `StateFlow` using `collectAsStateWithLifecycle()`.
-- **Stateless** composable (`UserListScreen`) receives state + event lambdas — no ViewModel reference, fully previewable and testable.
-- Events flow **up** (retry lambda), state flows **down** (uiState parameter).
+- Single `UserListScreen` composable — owns the ViewModel via `hiltViewModel()`.
+- Collects `StateFlow` using `collectAsStateWithLifecycle()` — stops collecting when lifecycle < STARTED.
+- Calls `viewModel.loadUsers()` directly for retry — no lambda passed as parameter.
+- `when (uiState)` is exhaustive — compiler enforces all 4 states are handled.
 
 ### ViewModel (`ListViewModel`)
 - Owns and exposes immutable `StateFlow<UiState<List<UserUI>>>`.
 - Survives configuration changes.
-- Translates `Result<T>` from the use case into `UiState`.
+- Collects `Flow<Result<List<UserUI>>>` from the use case; maps each `Result` emission to `UiState`.
 - Handles the `Empty` state (HTTP 200, empty list ≠ error).
 - Exposes `loadUsers()` publicly for retry.
 - **Never** catches `CancellationException` — structured concurrency is preserved.
 
 ### Use Case (`ListUseCause`)
-- Thin orchestration layer: delegates directly to the repository.
-- The right place to add business logic (sorting, filtering, pagination) without changing the ViewModel or Repository.
-- `operator fun invoke()` — called as `useCase()`, idiomatic Kotlin.
+- Thin pass-through: `operator fun invoke()` delegates to the repository.
+- Not `suspend` — returns a cold `Flow`, nothing executes until collected.
+- Right place to add business logic (sort, filter, combine sources) without changing ViewModel or Repository.
 
 ### Repository (`ListRepository` / `ListRepositoryImpl`)
 - Interface lives in the **domain** layer — depends on nothing.
 - Implementation lives in the **data** layer — depends on Retrofit.
-- Returns `Result<List<UserUI>>` — no `UiState`, no `Flow`, no Android framework types.
-- Catches only `IOException` and `HttpException` — does **not** catch bare `Exception` to avoid swallowing `CancellationException`.
+- Returns `Flow<Result<List<UserUI>>>` — supports multiple emissions (e.g. cache + network).
+- Uses `flow { }` builder + `.catch { }` operator.
+- `.catch` receives only real errors — `CancellationException` is propagated transparently by Flow.
 - No `withContext(Dispatchers.IO)` — Retrofit 3.x handles threading internally.
 
 ### DTO + Mapper
 - `ListItem` (DTO): network contract, all fields nullable (API may omit them).
-- `UserUI` (domain model): presentation contract, all fields non-nullable (null-safety resolved at the boundary).
-- `toUserUI()` extension function: pure function, stateless, trivially unit-testable.
+- `UserUI` (domain model): presentation contract, all fields non-nullable.
+- `toUserUI()` extension function: pure function, null defaults resolved here at the boundary.
 
 ### Dependency Injection (`Hilt`)
-- `NetworkModule` — `object`, all providers `@Singleton`. Interceptors created **inside** `@Provides` (lazy, not eager).
-- `RepositoryModule` — `abstract class`, uses `@Binds` (zero-overhead compile-time binding, no reflection).
+- `NetworkModule` — `object`, all providers `@Singleton`. Interceptors created inside `@Provides`.
+- `RepositoryModule` — `abstract class`, uses `@Binds` (zero-overhead compile-time binding).
+
+### Logging
+- `Log.d` in Repository on success — confirms data fetched and user count.
+- `Log.e` in ViewModel on failure paths — records error message for debugging.
+- No logs in UseCase or Mapper — pure pass-through and pure function respectively.
 
 ---
 
@@ -93,9 +98,9 @@ REST API
   └─▶ ListItem (DTO, nullable fields)
         └─▶ toUserUI() mapper
               └─▶ UserUI (domain model, non-nullable fields)
-                    └─▶ Result<List<UserUI>>
-                          └─▶ ListViewModel
-                                └─▶ UiState<List<UserUI>>
+                    └─▶ Flow<Result<List<UserUI>>>
+                          └─▶ ListViewModel (.collect + .fold)
+                                └─▶ UiState<List<UserUI>>  (StateFlow)
                                       └─▶ Compose UI
 ```
 
@@ -116,7 +121,7 @@ REST API
   └─────────┘ └───────┘ └───────┘
                             ▲
                          Retry button
-                         calls loadUsers()
+                         calls viewModel.loadUsers()
 ```
 
 ---
@@ -133,26 +138,26 @@ app/
 │   ├── remote/
 │   │   └── ApiService.kt            ← Retrofit interface
 │   └── repository/
-│       └── ListRepositoryImpl.kt    ← Repository implementation
+│       └── ListRepositoryImpl.kt    ← Flow<Result<T>> implementation
 │
 ├── di/
-│   ├── NetworkModule.kt             ← Retrofit, OkHttp, Moshi
+│   ├── NetworkModule.kt             ← Retrofit, OkHttp, Moshi (@Singleton)
 │   └── RepositoryModule.kt          ← @Binds interface → impl
 │
 ├── domain/
 │   ├── model/
-│   │   └── UserUI.kt                ← Domain model
+│   │   └── UserUI.kt                ← Domain model (non-nullable)
 │   ├── repository/
-│   │   └── ListRepository.kt        ← Repository contract
+│   │   └── ListRepository.kt        ← Flow<Result<T>> contract
 │   └── usecase/
-│       └── ListUseCause.kt          ← Business operation
+│       └── ListUseCause.kt          ← operator fun invoke()
 │
 ├── prasentation/
 │   ├── view/
-│   │   ├── ListViewScreen.kt        ← Compose UI (stateful + stateless)
-│   │   └── UiState.kt               ← Screen state model
+│   │   ├── ListViewScreen.kt        ← Single stateful Compose screen
+│   │   └── UiState.kt               ← sealed interface, 4 states
 │   └── viewModel/
-│       └── ListViewModel.kt         ← ViewModel
+│       └── ListViewModel.kt         ← StateFlow + collect + fold
 │
 ├── ui/theme/                        ← Material 3 theme
 │
@@ -167,17 +172,17 @@ app/
 |---|---|---|
 | UI | Jetpack Compose + Material 3 | Modern declarative UI, no XML |
 | State | `StateFlow` | Hot, always has a value, lifecycle-safe with `collectAsStateWithLifecycle` |
+| Stream | `Flow<Result<T>>` | Supports multiple emissions; errors as values, not exceptions |
 | DI | Hilt | First-class Android DI, compile-time verification |
 | Network | Retrofit 3 + OkHttp | Industry standard, suspend support built-in |
 | JSON | Moshi + KotlinJsonAdapterFactory | Kotlin-friendly, null-safe |
-| Error model | `Result<T>` | Kotlin stdlib, no custom wrapper needed |
 | Testing | JUnit + coroutines-test + Turbine | Standard stack, no mocking framework |
 
 ---
 
 ## Production Enhancements (out of scope for interview)
 
-- **Offline-first**: Add Room as local cache; repository reads from DB and refreshes from network.
+- **Offline-first**: Repository emits cached Room data first, then refreshes from network — `Flow` already supports this without any contract change.
 - **Pagination**: Replace `List<UserUI>` with Paging 3 `PagingData`.
 - **Certificate pinning**: Add `CertificatePinner` to `OkHttpClient`.
 - **Logging**: Remove `HttpLoggingInterceptor.Level.BODY` in release builds.
